@@ -1,0 +1,32 @@
+# Python cache / build
+__pycache__/
+*.py[cod]
+*.so
+*.log
+*.tmp
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# Large / generated artifacts
+checkpoints/
+prediction/
+wandb/
+
+# Data (re-downloadable competition files)
+data/
+data.tar.gz
+code.tar.gz
+
+# Misc large logs
+analysis/*.log

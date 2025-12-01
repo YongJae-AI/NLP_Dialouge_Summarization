@@ -1,14 +1,15 @@
 import argparse
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import List, Dict
 
 import pandas as pd
 import torch
 from datasets import Dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, get_peft_model
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
@@ -16,72 +17,67 @@ from transformers import (
 
 
 def build_prompt(dialogue: str, summary: str | None = None) -> str:
-    system = (
-        "당신은 한국어 대화 요약 비서이다.\n"
-        "대화를 읽고, 한두 문장으로 핵심 내용을 간결하게 요약하라.\n"
-    )
+    """Llama3용 프롬프트 템플릿 (decoder-only)."""
+    system = "당신은 한국어 대화 요약 비서이다.\n대화를 읽고, 한두 문장으로 핵심 내용을 간결하게 요약하라.\n"
     user = f"요약: 대화의 핵심만 간결하게 한두 문장으로 정리하시오.\n\n{dialogue.strip()}\n"
-    if summary is None:
-        assistant = ""
-    else:
-        assistant = summary.strip()
+    assistant = "" if summary is None else summary.strip()
     return f"<|system|>\n{system}\n<|user|>\n{user}\n<|assistant|>\n{assistant}"
 
 
-def load_data(data_dir: Path) -> dict[str, pd.DataFrame]:
-    train_df = pd.read_csv(data_dir / "train.csv")
-    dev_df = pd.read_csv(data_dir / "dev.csv")
-    test_df = pd.read_csv(data_dir / "test.csv")
-    return {"train": train_df, "dev": dev_df, "test": test_df}
+def load_data(data_dir: Path) -> Dict[str, pd.DataFrame]:
+    return {
+        "train": pd.read_csv(data_dir / "train.csv"),
+        "dev": pd.read_csv(data_dir / "dev.csv"),
+        "test": pd.read_csv(data_dir / "test.csv"),
+    }
 
 
 def make_sft_dataset(df: pd.DataFrame) -> Dataset:
-    texts = [build_prompt(row["dialogue"], row["summary"]) for _, row in df.iterrows()]
-    return Dataset.from_dict({"text": texts})
+    return Dataset.from_dict(
+        {
+            "text": [build_prompt(r["dialogue"], r["summary"]) for _, r in df.iterrows()],
+        }
+    )
 
 
 def make_infer_dataset(df: pd.DataFrame) -> Dataset:
-    prompts = [build_prompt(row["dialogue"], None) for _, row in df.iterrows()]
-    fnames = df["fname"].tolist()
-    return Dataset.from_dict({"prompt": prompts, "fname": fnames})
+    return Dataset.from_dict(
+        {
+            "prompt": [build_prompt(r["dialogue"], None) for _, r in df.iterrows()],
+            "fname": df["fname"].tolist(),
+        }
+    )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--batch_size_override",
-        type=int,
-        default=1,
-        help="per_device_train_batch_size",
-    )
+    parser = argparse.ArgumentParser(description="Llama3 8B fp16 + LoRA pipeline")
+    parser.add_argument("--batch_size_override", type=int, default=1)
+    parser.add_argument("--max_input_length", type=int, default=896)
+    parser.add_argument("--num_train_epochs", type=int, default=3)
     args = parser.parse_args()
 
     model_name = "meta-llama/Meta-Llama-3-8B"
-    max_input_length = 1280
+    max_input_length = args.max_input_length  # 프롬프트+대화(+요약) 전체 길이 상한
     max_new_tokens = 80
-    learning_rate = 2e-4
     per_device_batch_size = args.batch_size_override
     grad_accum_steps = 8
-    num_train_epochs = 3
+    num_train_epochs = args.num_train_epochs
+    learning_rate = 2e-4
 
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-    )
+    # run_id: 파일명/체크포인트 구분용
+    kst = timezone(timedelta(hours=9))
+    date_prefix = datetime.now(kst).strftime("%y%m%d")
+    run_id = f"{date_prefix}_llama3-lora-fp16"
 
-    print("### Load tokenizer & 4bit model ###")
+    print("### Load tokenizer & model (fp16) ###")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        quantization_config=bnb_config,
-        device_map="auto",
-    )
-    model = prepare_model_for_kbit_training(model)
+        torch_dtype=torch.float16,
+    ).to("cuda" if torch.cuda.is_available() else "cpu")
 
     lora_config = LoraConfig(
         r=64,
@@ -119,6 +115,7 @@ def main() -> None:
     train_tokenized = train_dataset.map(tokenize_sft, batched=True, remove_columns=["text"])
     dev_tokenized = dev_dataset.map(tokenize_sft, batched=True, remove_columns=["text"])
 
+    # label cut-off 미적용 (프롬프트+대화+요약 전체에 loss). 필요하면 여기서 cut-off 추가 가능.
     def add_labels(batch):
         batch["labels"] = batch["input_ids"].copy()
         return batch
@@ -126,7 +123,7 @@ def main() -> None:
     train_tokenized = train_tokenized.map(add_labels, batched=True)
     dev_tokenized = dev_tokenized.map(add_labels, batched=True)
 
-    output_dir = Path("checkpoints/llama3-lora")
+    output_dir = Path("checkpoints") / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
     training_args = TrainingArguments(
@@ -146,7 +143,7 @@ def main() -> None:
         fp16=True,
         gradient_checkpointing=True,
         load_best_model_at_end=True,
-        report_to=[],
+        report_to=["wandb"],
     )
 
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
@@ -159,14 +156,14 @@ def main() -> None:
         data_collator=data_collator,
     )
 
-    print("### Start training LoRA (Llama3) ###")
+    print("### Start training Llama3 LoRA fp16 ###")
     trainer.train()
     trainer.save_model(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))
 
     print("### Inference on test ###")
     model.eval()
-    summaries: list[dict[str, str]] = []
+    summaries: List[Dict[str, str]] = []
     for row in test_dataset:
         prompt = row["prompt"]
         fname = row["fname"]
@@ -193,11 +190,10 @@ def main() -> None:
     pred_df = pd.DataFrame(summaries)
     pred_dir = Path("prediction")
     pred_dir.mkdir(exist_ok=True, parents=True)
-    out_path = pred_dir / "llama3_lora_test.csv"
+    out_path = pred_dir / f"{run_id}.csv"
     pred_df.to_csv(out_path, index=False)
     print(f"Saved prediction to {out_path}")
 
 
 if __name__ == "__main__":
     main()
-

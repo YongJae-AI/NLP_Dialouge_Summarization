@@ -76,13 +76,22 @@ def main() -> None:
         torch_dtype=torch.float16,
     ).to("cuda" if torch.cuda.is_available() else "cpu")
 
+    # 모델 구조에 따라 LoRA 타겟 모듈이 다르다.
+    # - GPT2 계열: c_attn, c_proj
+    # - GPT-NeoX/polyglot 계열: query_key_value, dense, dense_h_to_4h, dense_4h_to_h
+    lm_lower = model_name.lower()
+    if "polyglot" in lm_lower or "neox" in lm_lower:
+        target_modules = ["query_key_value", "dense", "dense_h_to_4h", "dense_4h_to_h"]
+    else:
+        target_modules = ["c_attn", "c_proj"]
+
     lora_config = LoraConfig(
         r=32,
         lora_alpha=16,
         lora_dropout=0.1,
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules=["c_attn", "c_proj"],
+        target_modules=target_modules,
     )
     model = get_peft_model(model, lora_config)
     model.config.use_cache = False

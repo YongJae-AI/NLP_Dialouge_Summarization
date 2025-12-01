@@ -98,6 +98,10 @@ def main() -> None:
     model = get_peft_model(model, lora_config)
     model.config.use_cache = False
 
+    # gradient_checkpointing은 메모리 절약용 옵션인데, 현재 환경에서
+    # backward 시 grad_fn이 없어지는 문제가 있어 일단 끕니다. 필요하면
+    # TrainingArguments에서도 다시 켤 수 있습니다.
+
     data_dir = Path("data")
     splits = load_data(data_dir)
     train_dataset = make_sft_dataset(splits["train"])
@@ -141,7 +145,7 @@ def main() -> None:
         save_total_limit=2,
         logging_steps=100,
         fp16=True,
-        gradient_checkpointing=True,
+        gradient_checkpointing=False,
         load_best_model_at_end=True,
         report_to=["wandb"],
     )

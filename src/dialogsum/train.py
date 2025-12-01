@@ -1,16 +1,48 @@
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
+import torch
 from transformers import (
     EarlyStoppingCallback,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
 )
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from .data import get_data_collator, load_datasets
 from .model_kobart import load_kobart_model_and_tokenizer
 from .model_t5 import load_t5_model_and_tokenizer
 from .utils import ModelConfig, get_checkpoint_dir, set_seed
+
+
+class WeightedSeq2SeqTrainer(Seq2SeqTrainer):
+    """Seq2SeqTrainer with optional weighted sampler for train set."""
+
+    def __init__(self, *args, train_weights=None, **kwargs):
+        self.train_weights = train_weights
+        super().__init__(*args, **kwargs)
+
+    def get_train_dataloader(self):
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+        if self.train_weights is None:
+            return super().get_train_dataloader()
+
+        sampler = WeightedRandomSampler(
+            weights=self.train_weights,
+            num_samples=len(self.train_weights),
+            replacement=True,
+        )
+
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.args.train_batch_size,
+            sampler=sampler,
+            collate_fn=self.data_collator,
+            drop_last=self.args.dataloader_drop_last,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+        )
 
 
 def _prepare_model_and_tokenizer(cfg: ModelConfig):
@@ -30,6 +62,7 @@ def build_trainer(
     use_wandb: bool = False,
     wandb_project: Optional[str] = None,
     wandb_run_name: Optional[str] = None,
+    train_weights: Optional[torch.Tensor] = None,
 ) -> Tuple[Seq2SeqTrainer, Seq2SeqTrainingArguments]:
     logging_dir = f"{output_dir}/logs"
     report_to = ["wandb"] if use_wandb and wandb_project else []
@@ -48,8 +81,8 @@ def build_trainer(
         fp16=cfg.fp16,
         logging_dir=logging_dir,
         logging_steps=100,
-        eval_steps=500,
-        save_steps=500,
+        eval_steps=cfg.eval_steps,
+        save_steps=cfg.save_steps,
         load_best_model_at_end=True,
         metric_for_best_model="eval_rougeL",
         run_name=wandb_run_name,
@@ -84,7 +117,7 @@ def build_trainer(
             ),
         )
 
-    trainer = Seq2SeqTrainer(
+    trainer = WeightedSeq2SeqTrainer(
         model=model,
         args=args,
         train_dataset=datasets["train"],
@@ -93,6 +126,7 @@ def build_trainer(
         data_collator=data_collator,
         compute_metrics=compute_metrics,
         callbacks=callbacks,
+        train_weights=train_weights,
     )
     return trainer, args
 
@@ -106,6 +140,8 @@ def run_sft_training(
     use_wandb: bool = False,
     wandb_project: Optional[str] = None,
     wandb_run_name: Optional[str] = None,
+    len_weight: Optional[float] = None,
+    len_top_pct: float = 0.3,
 ) -> Tuple[Any, Any]:
     set_seed(42)
 
@@ -124,6 +160,14 @@ def run_sft_training(
         style_prompt=style_prompt,
         model_type=model_cfg.model_type,
     )
+
+    train_weights = None
+    if len_weight is not None and len_weight > 1.0:
+        lengths = datasets["train"].df["dialogue"].astype(str).str.len().to_numpy()
+        threshold = np.quantile(lengths, 1 - len_top_pct)
+        weights = np.ones_like(lengths, dtype=np.float32)
+        weights[lengths >= threshold] = len_weight
+        train_weights = torch.tensor(weights, dtype=torch.double)
 
     output_dir = get_checkpoint_dir(checkpoint_base_dir, wandb_run_name or "run")
 
@@ -149,6 +193,7 @@ def run_sft_training(
         use_wandb=use_wandb,
         wandb_project=wandb_project,
         wandb_run_name=wandb_run_name,
+        train_weights=train_weights,
     )
 
     trainer.train()

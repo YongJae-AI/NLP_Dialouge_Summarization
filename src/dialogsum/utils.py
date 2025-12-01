@@ -32,6 +32,8 @@ class ModelConfig:
     num_train_epochs: int
     fp16: bool = True
     early_stopping_patience: int | None = 3
+    eval_steps: int = 500
+    save_steps: int = 500
     style_prompt: str | None = None
     use_wandb: bool = False
     wandb_project: str | None = None

@@ -68,6 +68,7 @@ def main() -> None:
 
     print(f"### Load tokenizer & model: {model_name} ###")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # pad_token이 없는 모델이 많으므로 eos_token으로 대체해 패딩/라벨 계산 안정화
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -162,12 +163,15 @@ def main() -> None:
             save_total_limit=2,
             logging_steps=100,
             fp16=True,
-            gradient_checkpointing=True,
+            bf16=False,
+            max_grad_norm=1.0,
+            gradient_checkpointing=False,  # OOM 위험 낮추려면 max_input_length 더 줄이기
             load_best_model_at_end=True,
             report_to=[],
         )
 
-        data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+        # 이미 라벨이 포함되어 있으므로 별도 collator 없이 그대로 사용
+        data_collator = None
 
         trainer = Trainer(
             model=model,

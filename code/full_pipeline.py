@@ -36,6 +36,42 @@ def parse_args():
         default=None,
         help="Optional batch size override for this run.",
     )
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help="Optional custom run name (suffix).",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=None,
+        help="Early stopping patience override.",
+    )
+    parser.add_argument(
+        "--eval_steps",
+        type=int,
+        default=None,
+        help="Evaluation steps override.",
+    )
+    parser.add_argument(
+        "--save_steps",
+        type=int,
+        default=None,
+        help="Save steps override.",
+    )
+    parser.add_argument(
+        "--len_weight",
+        type=float,
+        default=None,
+        help="Length-based sampling weight for top pct of dialogues.",
+    )
+    parser.add_argument(
+        "--len_top_pct",
+        type=float,
+        default=0.3,
+        help="Top percentage (0-1) of longest dialogues to weight.",
+    )
     return parser.parse_args()
 
 
@@ -48,7 +84,7 @@ def main():
     date_prefix = datetime.now(kst).strftime("%y%m%d")
     prediction_dir = cfg.get("paths", {}).get("prediction_dir", "prediction")
     run_idx = get_next_run_index(prediction_dir, date_prefix)
-    base_name = "kobart-base-style_prompt"
+    base_name = args.run_name if args.run_name else "kobart-base-style_prompt"
     run_id = f"{date_prefix}{run_idx}_{base_name}"
 
     model_cfg = ModelConfig(
@@ -60,6 +96,9 @@ def main():
         batch_size=cfg["train"]["batch_size"],
         num_train_epochs=cfg["train"]["num_train_epochs"],
         fp16=cfg["train"].get("fp16", True),
+        early_stopping_patience=cfg["train"].get("early_stopping_patience", 3),
+        eval_steps=cfg["train"].get("eval_steps", 500),
+        save_steps=cfg["train"].get("save_steps", 500),
         style_prompt=cfg.get("style_prompt", None),
         use_wandb=cfg.get("wandb", {}).get("use_wandb", False),
         wandb_project=cfg.get("wandb", {}).get("project", None),
@@ -69,6 +108,12 @@ def main():
 
     if args.batch_size_override is not None:
         model_cfg.batch_size = args.batch_size_override
+    if args.patience is not None:
+        model_cfg.early_stopping_patience = args.patience
+    if args.eval_steps is not None:
+        model_cfg.eval_steps = args.eval_steps
+    if args.save_steps is not None:
+        model_cfg.save_steps = args.save_steps
 
     checkpoint_dir = cfg.get("paths", {}).get("checkpoint_dir", "checkpoints")
 
@@ -81,6 +126,8 @@ def main():
         use_wandb=model_cfg.use_wandb,
         wandb_project=model_cfg.wandb_project,
         wandb_run_name=model_cfg.wandb_run_name,
+        len_weight=args.len_weight,
+        len_top_pct=args.len_top_pct,
     )
 
     data_cfg = DataConfig()

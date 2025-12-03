@@ -43,8 +43,14 @@ class CSVLoggerCallback(TrainerCallback):
 class WeightedSeq2SeqTrainer(Seq2SeqTrainer):
     """Seq2SeqTrainer with optional weighted sampler for train set."""
 
-    def __init__(self, *args, train_weights=None, **kwargs):
+    def __init__(self, *args, train_weights=None, train_log_path: str | None = None, **kwargs):
         self.train_weights = train_weights
+        self.train_log_path = train_log_path
+        if self.train_log_path:
+            os.makedirs(os.path.dirname(self.train_log_path), exist_ok=True)
+            if not os.path.exists(self.train_log_path):
+                with open(self.train_log_path, "w", encoding="utf-8-sig") as f:
+                    f.write("step,loss,grad_norm\n")
         super().__init__(*args, **kwargs)
 
     def get_train_dataloader(self):
@@ -69,6 +75,22 @@ class WeightedSeq2SeqTrainer(Seq2SeqTrainer):
             pin_memory=self.args.dataloader_pin_memory,
         )
 
+    def log(self, logs: Dict[str, float]) -> None:
+        # grad norm 계산 및 로그에 추가
+        grad_norm = None
+        if "loss" in logs:
+            grad_norm = compute_grad_norm(self.model)
+            if grad_norm is not None:
+                logs["grad_norm"] = grad_norm
+
+        super().log(logs)
+
+        # 별도 CSV에도 기록
+        if self.train_log_path and "loss" in logs and grad_norm is not None:
+            step = self.state.global_step
+            with open(self.train_log_path, "a", encoding="utf-8-sig") as f:
+                f.write(f"{step},{logs.get('loss', '')},{grad_norm}\n")
+
 
 def _prepare_model_and_tokenizer(cfg: ModelConfig):
     if cfg.model_type.lower() == "kobart":
@@ -76,6 +98,17 @@ def _prepare_model_and_tokenizer(cfg: ModelConfig):
     else:
         model, tokenizer = load_t5_model_and_tokenizer(cfg.model_name)
     return model, tokenizer
+
+
+def compute_grad_norm(model, norm_type: float = 2.0) -> float | None:
+    import torch
+
+    parameters = [p for p in model.parameters() if p.grad is not None]
+    if not parameters:
+        return None
+    device = parameters[0].grad.device
+    total = torch.norm(torch.stack([torch.norm(p.grad.detach(), norm_type).to(device) for p in parameters]), norm_type)
+    return total.item()
 
 
 def build_trainer(
@@ -91,6 +124,7 @@ def build_trainer(
 ) -> Tuple[Seq2SeqTrainer, Seq2SeqTrainingArguments]:
     logging_dir = f"{output_dir}/logs"
     report_to = ["wandb"] if use_wandb and wandb_project else []
+    train_log_path = f"{logging_dir}/train_metrics.csv"
 
     args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
@@ -113,6 +147,7 @@ def build_trainer(
         run_name=wandb_run_name,
         report_to=report_to,
         max_steps=cfg.max_steps if cfg.max_steps is not None else -1,
+        overwrite_output_dir=True,
     )
 
     data_collator = get_data_collator(tokenizer)
@@ -155,6 +190,7 @@ def build_trainer(
         compute_metrics=compute_metrics,
         callbacks=callbacks,
         train_weights=train_weights,
+        train_log_path=train_log_path,
     )
     return trainer, args
 

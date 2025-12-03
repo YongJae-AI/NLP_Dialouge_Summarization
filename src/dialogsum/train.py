@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -6,6 +7,7 @@ from transformers import (
     EarlyStoppingCallback,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
+    TrainerCallback,
 )
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
@@ -13,6 +15,29 @@ from .data import get_data_collator, load_datasets
 from .model_kobart import load_kobart_model_and_tokenizer
 from .model_t5 import load_t5_model_and_tokenizer
 from .utils import ModelConfig, get_checkpoint_dir, set_seed
+
+
+class CSVLoggerCallback(TrainerCallback):
+    """간단한 CSV 로그 콜백 (eval 단계에서 ROUGE를 스텝별 기록)."""
+
+    def __init__(self, log_path: str) -> None:
+        self.log_path = log_path
+        os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+        if not os.path.exists(self.log_path):
+            with open(self.log_path, "w", encoding="utf-8-sig") as f:
+                f.write("step,rouge1,rouge2,rougeL\n")
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        if metrics is None:
+            return
+        r1 = metrics.get("eval_rouge1")
+        r2 = metrics.get("eval_rouge2")
+        rL = metrics.get("eval_rougeL")
+        if r1 is None or r2 is None or rL is None:
+            return
+        step = state.global_step
+        with open(self.log_path, "a", encoding="utf-8-sig") as f:
+            f.write(f"{step},{r1},{r2},{rL}\n")
 
 
 class WeightedSeq2SeqTrainer(Seq2SeqTrainer):
@@ -116,6 +141,8 @@ def build_trainer(
                 early_stopping_patience=cfg.early_stopping_patience,
             ),
         )
+    csv_log_path = os.path.join(output_dir, "logs", "metrics.csv")
+    callbacks.append(CSVLoggerCallback(csv_log_path))
 
     trainer = WeightedSeq2SeqTrainer(
         model=model,

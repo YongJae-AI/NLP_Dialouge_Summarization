@@ -13,7 +13,7 @@ from dialogsum.utils import (
     get_prediction_path,
     load_yaml_config,
 )
-from inference.generate import run_generation
+from inference.generate import run_generation, run_generation_with_references
 
 
 def parse_args():
@@ -132,6 +132,7 @@ def main():
 
     data_cfg = DataConfig()
     splits = load_csv_splits(data_cfg)
+    dev_df = splits["dev"]
     test_df = splits["test"]
 
     if cfg["model"]["type"].lower() != "kobart":
@@ -155,8 +156,23 @@ def main():
         filename = f"{run_id}.csv"
 
     out_path = get_prediction_path(prediction_dir, filename)
-    pred_df.to_csv(out_path, index=False)
+    pred_df.to_csv(out_path, index=False, encoding="utf-8-sig")
     print(f"Saved prediction to {out_path}")
+
+    # dev셋에 대해 reference와 함께 요약 결과 저장 (학습 품질 확인용)
+    dev_pred_df = run_generation_with_references(
+        model=model,
+        tokenizer=tokenizer,
+        df=dev_df,
+        encoder_max_len=model_cfg.encoder_max_len,
+        decoder_max_len=model_cfg.decoder_max_len,
+        style_prompt=model_cfg.style_prompt,
+        model_type=model_cfg.model_type,
+        batch_size=model_cfg.batch_size,
+    )
+    dev_out_path = get_prediction_path(prediction_dir, f"{run_id}_dev_full.csv")
+    dev_pred_df.to_csv(dev_out_path, index=False, encoding="utf-8-sig")
+    print(f"Saved dev predictions with references to {dev_out_path}")
 
 
 if __name__ == "__main__":

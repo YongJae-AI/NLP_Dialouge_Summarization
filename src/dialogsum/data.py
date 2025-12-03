@@ -5,6 +5,8 @@ import pandas as pd
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase
 
+from .utils import ROOT_DIR, resolve_path
+
 
 class DialogueSummaryDataset(Dataset):
     def __init__(
@@ -74,15 +76,15 @@ class DialogueSummaryDataset(Dataset):
 
 @dataclass
 class DataConfig:
-    train_path: str = "data/train.csv"
-    dev_path: str = "data/dev.csv"
-    test_path: str = "data/test.csv"
+    train_path: str = str(ROOT_DIR / "data" / "train.csv")
+    dev_path: str = str(ROOT_DIR / "data" / "dev.csv")
+    test_path: str = str(ROOT_DIR / "data" / "test.csv")
 
 
 def load_csv_splits(cfg: DataConfig) -> Dict[str, pd.DataFrame]:
-    train_df = pd.read_csv(cfg.train_path)
-    dev_df = pd.read_csv(cfg.dev_path)
-    test_df = pd.read_csv(cfg.test_path)
+    train_df = pd.read_csv(resolve_path(cfg.train_path))
+    dev_df = pd.read_csv(resolve_path(cfg.dev_path))
+    test_df = pd.read_csv(resolve_path(cfg.test_path))
     return {"train": train_df, "dev": dev_df, "test": test_df}
 
 

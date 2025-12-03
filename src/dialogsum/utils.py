@@ -1,11 +1,23 @@
 import os
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
 import torch
 import yaml
+
+# 프로젝트 루트 절대 경로
+ROOT_DIR = Path(__file__).resolve().parents[2]
+
+
+def resolve_path(path_str: str) -> str:
+    """상대경로를 프로젝트 루트 기준 절대경로로 변환."""
+    p = Path(path_str).expanduser()
+    if not p.is_absolute():
+        p = ROOT_DIR / p
+    return str(p.resolve())
 
 
 def set_seed(seed: int) -> None:
@@ -39,15 +51,18 @@ class ModelConfig:
     wandb_project: str | None = None
     wandb_entity: str | None = None
     wandb_run_name: str | None = None
+    max_steps: int | None = None
 
 
 def get_checkpoint_dir(base_dir: str, run_name: str) -> str:
+    base_dir = resolve_path(base_dir)
     path = os.path.join(base_dir, run_name)
     os.makedirs(path, exist_ok=True)
     return path
 
 
 def get_prediction_path(base_dir: str, filename: str) -> str:
+    base_dir = resolve_path(base_dir)
     os.makedirs(base_dir, exist_ok=True)
     return os.path.join(base_dir, filename)
 

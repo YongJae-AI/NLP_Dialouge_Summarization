@@ -1,0 +1,26 @@
+model:
+  type: t5
+  name: nlpai-lab/kullm-polyglot-1.3b
+
+data:
+  encoder_max_len: 896    # OOM 없으면 1024까지 올려도 됨
+  decoder_max_len: 80
+
+train:
+  learning_rate: 1.5e-4   # UL2/Adafactor 패턴
+  batch_size: 2           # VRAM 여유 있으면 4~8로 상향
+  num_train_epochs: 1
+  fp16: true
+  eval_steps: 10
+  save_steps: 10
+  early_stopping_patience: 6
+  max_steps: 20           # 스모크 테스트용 짧은 스텝
+
+style_prompt: "요약: 대화의 핵심만 간결하게 한두 문장으로 정리하시오. 역할/대상/시점(지금 vs 계획)을 왜곡하지 말 것. 한두 문장으로 핵심만."
+
+paths:
+  checkpoint_dir: checkpoints/kullm-ul2
+  prediction_dir: prediction
+
+wandb:
+  use_wandb: false

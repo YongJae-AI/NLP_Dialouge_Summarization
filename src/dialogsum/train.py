@@ -112,6 +112,7 @@ def build_trainer(
         metric_for_best_model="eval_rougeL",
         run_name=wandb_run_name,
         report_to=report_to,
+        max_steps=cfg.max_steps if cfg.max_steps is not None else -1,
     )
 
     data_collator = get_data_collator(tokenizer)

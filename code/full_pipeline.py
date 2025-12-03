@@ -12,6 +12,7 @@ from dialogsum.utils import (
     get_next_run_index,
     get_prediction_path,
     load_yaml_config,
+    resolve_path,
 )
 from inference.generate import run_generation, run_generation_with_references
 
@@ -104,7 +105,12 @@ def main():
         wandb_project=cfg.get("wandb", {}).get("project", None),
         wandb_entity=cfg.get("wandb", {}).get("entity", None),
         wandb_run_name=run_id,
+        max_steps=cfg["train"].get("max_steps"),
     )
+
+    checkpoint_dir = cfg.get("paths", {}).get("checkpoint_dir", "checkpoints")
+    checkpoint_dir = resolve_path(checkpoint_dir)
+    run_dir = os.path.join(checkpoint_dir, run_id)
 
     if args.batch_size_override is not None:
         model_cfg.batch_size = args.batch_size_override
@@ -114,8 +120,8 @@ def main():
         model_cfg.eval_steps = args.eval_steps
     if args.save_steps is not None:
         model_cfg.save_steps = args.save_steps
-
-    checkpoint_dir = cfg.get("paths", {}).get("checkpoint_dir", "checkpoints")
+    if args.patience is not None:
+        model_cfg.early_stopping_patience = args.patience
 
     model, tokenizer = run_sft_training(
         model_cfg=model_cfg,
@@ -132,12 +138,9 @@ def main():
 
     data_cfg = DataConfig()
     splits = load_csv_splits(data_cfg)
+    train_df = splits["train"]
     dev_df = splits["dev"]
     test_df = splits["test"]
-
-    if cfg["model"]["type"].lower() != "kobart":
-        model = AutoModelForSeq2SeqLM.from_pretrained(os.path.join(checkpoint_dir, cfg["model"]["name"]))
-        tokenizer = AutoTokenizer.from_pretrained(os.path.join(checkpoint_dir, cfg["model"]["name"]))
 
     pred_df = run_generation(
         model=model,
@@ -148,6 +151,7 @@ def main():
         style_prompt=model_cfg.style_prompt,
         model_type=model_cfg.model_type,
         batch_size=model_cfg.batch_size,
+        beam_size=4,
     )
 
     if args.prediction_name:
@@ -159,7 +163,11 @@ def main():
     pred_df.to_csv(out_path, index=False, encoding="utf-8-sig")
     print(f"Saved prediction to {out_path}")
 
-    # dev셋에 대해 reference와 함께 요약 결과 저장 (학습 품질 확인용)
+    # 레퍼런스 포함 요약 결과 저장 (EDA용): dev + train
+    full_pred_dir = resolve_path(cfg.get("paths", {}).get("full_pred_dir", "prediction_full"))
+    os.makedirs(full_pred_dir, exist_ok=True)
+
+    # dev
     dev_pred_df = run_generation_with_references(
         model=model,
         tokenizer=tokenizer,
@@ -169,10 +177,27 @@ def main():
         style_prompt=model_cfg.style_prompt,
         model_type=model_cfg.model_type,
         batch_size=model_cfg.batch_size,
+        beam_size=4,
     )
-    dev_out_path = get_prediction_path(prediction_dir, f"{run_id}_dev_full.csv")
+    dev_out_path = os.path.join(full_pred_dir, f"{run_id}_dev_full.csv")
     dev_pred_df.to_csv(dev_out_path, index=False, encoding="utf-8-sig")
     print(f"Saved dev predictions with references to {dev_out_path}")
+
+    # train
+    train_pred_df = run_generation_with_references(
+        model=model,
+        tokenizer=tokenizer,
+        df=train_df,
+        encoder_max_len=model_cfg.encoder_max_len,
+        decoder_max_len=model_cfg.decoder_max_len,
+        style_prompt=model_cfg.style_prompt,
+        model_type=model_cfg.model_type,
+        batch_size=model_cfg.batch_size,
+        beam_size=4,
+    )
+    train_out_path = os.path.join(full_pred_dir, f"{run_id}_train_full.csv")
+    train_pred_df.to_csv(train_out_path, index=False, encoding="utf-8-sig")
+    print(f"Saved train predictions with references to {train_out_path}")
 
 
 if __name__ == "__main__":

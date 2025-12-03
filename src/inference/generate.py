@@ -15,6 +15,7 @@ def run_generation(
     style_prompt: Optional[str],
     model_type: str,
     batch_size: int = 8,
+    beam_size: int = 4,
 ) -> pd.DataFrame:
     dataset = DialogueSummaryDataset(
         test_df,
@@ -46,7 +47,7 @@ def run_generation(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 max_length=decoder_max_len,
-                num_beams=4,
+                num_beams=beam_size,
             )
 
         preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
@@ -64,6 +65,7 @@ def run_generation_with_references(
     style_prompt: Optional[str],
     model_type: str,
     batch_size: int = 8,
+    beam_size: int = 4,
 ) -> pd.DataFrame:
     """dev처럼 정답 summary가 있는 데이터셋에서 요약 + 참조를 함께 저장."""
     dataset = DialogueSummaryDataset(
@@ -95,7 +97,7 @@ def run_generation_with_references(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 max_length=decoder_max_len,
-                num_beams=4,
+                num_beams=beam_size,
             )
 
         preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)

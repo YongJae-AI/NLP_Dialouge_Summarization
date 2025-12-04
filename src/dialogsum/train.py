@@ -94,9 +94,10 @@ class CSVLoggerCallback(TrainerCallback):
 class WeightedSeq2SeqTrainer(Seq2SeqTrainer):
     """Seq2SeqTrainer with optional weighted sampler for train set."""
 
-    def __init__(self, *args, train_weights=None, train_log_path: str | None = None, **kwargs):
+    def __init__(self, *args, train_weights=None, train_log_path: str | None = None, kd_alpha: float | None = None, **kwargs):
         self.train_weights = train_weights
         self.train_log_path = train_log_path
+        self.kd_alpha = kd_alpha
         if self.train_log_path:
             os.makedirs(os.path.dirname(self.train_log_path), exist_ok=True)
             if not os.path.exists(self.train_log_path):
@@ -142,6 +143,29 @@ class WeightedSeq2SeqTrainer(Seq2SeqTrainer):
             with open(self.train_log_path, "a", encoding="utf-8-sig") as f:
                 f.write(f"{step},{logs.get('loss', '')},{grad_norm}\n")
 
+    def compute_loss(self, model, inputs, return_outputs=False):
+        kd_alpha = self.kd_alpha
+        teacher_labels = inputs.pop("teacher_labels", None)
+        outputs = model(**inputs)
+        if kd_alpha is None or teacher_labels is None:
+            return super().compute_loss(model, inputs, return_outputs=return_outputs)
+
+        # 기본 CE
+        labels = inputs.get("labels")
+        loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
+        logits = outputs.logits
+        shift_logits = logits[:, :-1, :].contiguous()
+        shift_labels = labels[:, 1:].contiguous()
+        loss_gold = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+
+        # Teacher CE
+        t_labels = teacher_labels.to(logits.device)
+        shift_t_labels = t_labels[:, 1:].contiguous()
+        loss_teacher = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_t_labels.view(-1))
+
+        loss = (1 - kd_alpha) * loss_gold + kd_alpha * loss_teacher
+        return (loss, outputs) if return_outputs else loss
+
 
 def _prepare_model_and_tokenizer(cfg: ModelConfig):
     if cfg.model_type.lower() == "kobart":
@@ -173,6 +197,7 @@ def build_trainer(
     wandb_run_name: Optional[str] = None,
     train_weights: Optional[torch.Tensor] = None,
     extra_callbacks: Optional[list] = None,
+    kd_alpha: Optional[float] = None,
 ) -> Tuple[Seq2SeqTrainer, Seq2SeqTrainingArguments]:
     logging_dir = f"{output_dir}/logs"
     report_to = ["wandb"] if use_wandb and wandb_project else []
@@ -245,6 +270,7 @@ def build_trainer(
         callbacks=callbacks,
         train_weights=train_weights,
         train_log_path=train_log_path,
+        kd_alpha=kd_alpha,
     )
     return trainer, args
 
@@ -260,6 +286,8 @@ def run_sft_training(
     wandb_run_name: Optional[str] = None,
     len_weight: Optional[float] = None,
     len_top_pct: float = 0.3,
+    teacher_preds_path: Optional[str] = None,
+    kd_alpha: Optional[float] = None,
 ) -> Tuple[Any, Any]:
     set_seed(42)
 
@@ -271,12 +299,18 @@ def run_sft_training(
     else:
         tokenizer.bos_token = None
 
+    teacher_map = None
+    if teacher_preds_path:
+        t_df = pd.read_csv(resolve_path(teacher_preds_path))
+        teacher_map = {str(r["fname"]): str(r["summary"]) for _, r in t_df.iterrows() if pd.notna(r.get("summary"))}
+
     datasets = load_datasets(
         tokenizer=tokenizer,
         encoder_max_len=encoder_max_len,
         decoder_max_len=decoder_max_len,
         style_prompt=style_prompt,
         model_type=model_cfg.model_type,
+        teacher_map=teacher_map,
     )
 
     train_weights = None
@@ -322,6 +356,7 @@ def run_sft_training(
                 save_steps=model_cfg.save_steps,
             ),
         ],
+        kd_alpha=kd_alpha,
     )
 
     trainer.train()

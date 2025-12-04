@@ -25,7 +25,7 @@ paths:
   prediction_dir: prediction
 
 wandb:
-  use_wandb: true
+  use_wandb: false
   entity: aistages-nlp-3
   project: Dialogue Summarization
   run_name: kobart-base-qa

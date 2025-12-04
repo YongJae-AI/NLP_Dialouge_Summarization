@@ -6,7 +6,7 @@ data:
   encoder_max_len: 1024
   decoder_max_len: 80
   truncate_tail: false
-  chunk_overlap: true
+  chunk_overlap: false
   chunk_overlap_tokens: 128
 
 train:
@@ -25,7 +25,7 @@ paths:
   prediction_dir: prediction
 
 wandb:
-  use_wandb: true
+  use_wandb: false
   entity: aistages-nlp-3
   project: Dialogue Summarization
   run_name: kobart-base-style_prompt

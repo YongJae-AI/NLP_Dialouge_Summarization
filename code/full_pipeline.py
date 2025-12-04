@@ -115,6 +115,18 @@ def parse_args():
         default=0.3,
         help="Top percentage (0-1) of longest dialogues to weight.",
     )
+    parser.add_argument(
+        "--teacher_preds",
+        type=str,
+        default=None,
+        help="Path to teacher prediction CSV for KD (must have fname, summary).",
+    )
+    parser.add_argument(
+        "--kd_alpha",
+        type=float,
+        default=None,
+        help="KD mixing weight (0-1).",
+    )
     return parser.parse_args()
 
 
@@ -148,6 +160,8 @@ def main():
         wandb_entity=cfg.get("wandb", {}).get("entity", None),
         wandb_run_name=run_id,
         max_steps=cfg["train"].get("max_steps"),
+        kd_alpha=cfg["train"].get("kd_alpha"),
+        teacher_preds_path=cfg.get("train", {}).get("teacher_preds_path"),
     )
 
     checkpoint_dir = cfg.get("paths", {}).get("checkpoint_dir", "checkpoints")
@@ -158,6 +172,10 @@ def main():
         model_cfg.batch_size = args.batch_size_override
     if args.patience is not None:
         model_cfg.early_stopping_patience = args.patience
+    if args.kd_alpha is not None:
+        model_cfg.kd_alpha = args.kd_alpha
+    if args.teacher_preds is not None:
+        model_cfg.teacher_preds_path = args.teacher_preds
     if args.eval_steps is not None:
         model_cfg.eval_steps = args.eval_steps
     if args.save_steps is not None:
@@ -176,6 +194,8 @@ def main():
         wandb_run_name=model_cfg.wandb_run_name,
         len_weight=args.len_weight,
         len_top_pct=args.len_top_pct,
+        teacher_preds_path=model_cfg.teacher_preds_path,
+        kd_alpha=model_cfg.kd_alpha,
     )
 
     data_cfg = DataConfig()

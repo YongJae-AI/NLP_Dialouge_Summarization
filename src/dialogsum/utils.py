@@ -52,6 +52,9 @@ class ModelConfig:
     wandb_entity: str | None = None
     wandb_run_name: str | None = None
     max_steps: int | None = None
+    kd_alpha: float | None = None
+    teacher_preds_path: str | None = None
+    dpo_beta: float | None = None
 
 
 def get_checkpoint_dir(base_dir: str, run_name: str) -> str:

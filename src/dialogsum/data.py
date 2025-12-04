@@ -19,6 +19,7 @@ class DialogueSummaryDataset(Dataset):
         model_type: str = "kobart",
         is_train: bool = True,
         truncate_tail: bool = False,
+        teacher_map: Optional[Dict[str, str]] = None,
     ) -> None:
         self.df = df.reset_index(drop=True)
         self.tokenizer = tokenizer
@@ -28,6 +29,7 @@ class DialogueSummaryDataset(Dataset):
         self.model_type = model_type
         self.is_train = is_train
         self.truncate_tail = truncate_tail
+        self.teacher_map = teacher_map or {}
 
     def _trim_dialogue(self, dialogue: str) -> str:
         # 뒤에서부터 턴을 붙여 encoder_max_len을 넘지 않도록 자른다.
@@ -91,6 +93,17 @@ class DialogueSummaryDataset(Dataset):
                     return_tensors=None,
                 )["input_ids"]
             model_inputs["labels"] = labels
+            if "fname" in row and row["fname"] in self.teacher_map:
+                t_sum = str(self.teacher_map[row["fname"]])
+                with self.tokenizer.as_target_tokenizer():
+                    t_labels = self.tokenizer(
+                        t_sum,
+                        max_length=self.decoder_max_len,
+                        padding="max_length",
+                        truncation=True,
+                        return_tensors=None,
+                    )["input_ids"]
+                model_inputs["teacher_labels"] = t_labels
 
         # fname는 학습/검증 단계에서는 필요 없으므로,
         # is_train=False (주로 inference)일 때만 포함한다.
@@ -123,6 +136,7 @@ def load_datasets(
     style_prompt: Optional[str],
     model_type: str,
     data_cfg: Optional[DataConfig] = None,
+    teacher_map: Optional[Dict[str, str]] = None,
 ) -> Dict[str, DialogueSummaryDataset]:
     if data_cfg is None:
         data_cfg = DataConfig()
@@ -183,6 +197,7 @@ def load_datasets(
         model_type=model_type,
         is_train=True,
         truncate_tail=data_cfg.truncate_tail,
+        teacher_map=teacher_map,
     )
     dev_ds = DialogueSummaryDataset(
         dev_df,
@@ -193,6 +208,7 @@ def load_datasets(
         model_type=model_type,
         is_train=True,
         truncate_tail=data_cfg.truncate_tail,
+        teacher_map=teacher_map,
     )
     test_ds = DialogueSummaryDataset(
         test_df,

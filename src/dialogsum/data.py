@@ -18,6 +18,7 @@ class DialogueSummaryDataset(Dataset):
         style_prompt: Optional[str] = None,
         model_type: str = "kobart",
         is_train: bool = True,
+        truncate_tail: bool = False,
     ) -> None:
         self.df = df.reset_index(drop=True)
         self.tokenizer = tokenizer
@@ -26,6 +27,26 @@ class DialogueSummaryDataset(Dataset):
         self.style_prompt = style_prompt
         self.model_type = model_type
         self.is_train = is_train
+        self.truncate_tail = truncate_tail
+
+    def _trim_dialogue(self, dialogue: str) -> str:
+        # 뒤에서부터 턴을 붙여 encoder_max_len을 넘지 않도록 자른다.
+        turns = str(dialogue).split("#Person")
+        turns = ["#Person" + t for t in turns if t.strip()]
+        kept: List[str] = []
+        for t in reversed(turns):
+            cand = " ".join([t] + kept)
+            ids = self.tokenizer(
+                cand,
+                add_special_tokens=False,
+                return_attention_mask=False,
+            )["input_ids"]
+            if len(ids) > self.encoder_max_len:
+                break
+            kept.insert(0, t)
+        if not kept:
+            return dialogue
+        return " ".join(kept)
 
     def __len__(self) -> int:
         return len(self.df)
@@ -33,12 +54,16 @@ class DialogueSummaryDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         row = self.df.iloc[idx]
         dialogue = str(row["dialogue"])
+        if self.truncate_tail:
+            dialogue = self._trim_dialogue(dialogue)
 
         if self.style_prompt:
-            if self.model_type == "kobart":
-                src_text = f"{self.style_prompt} {dialogue}"
-            else:
-                src_text = f"{self.style_prompt}: {dialogue}"
+            # QA+스타일 프롬프트를 포함한 정형 입력
+            src_text = (
+                f"{self.style_prompt}\n\n"
+                f"대화:\n{dialogue}\n\n"
+                "답변:"
+            )
         else:
             src_text = dialogue
 
@@ -79,6 +104,9 @@ class DataConfig:
     train_path: str = str(ROOT_DIR / "data" / "train.csv")
     dev_path: str = str(ROOT_DIR / "data" / "dev.csv")
     test_path: str = str(ROOT_DIR / "data" / "test.csv")
+    truncate_tail: bool = False
+    chunk_overlap: bool = False
+    chunk_overlap_tokens: int = 128
 
 
 def load_csv_splits(cfg: DataConfig) -> Dict[str, pd.DataFrame]:
@@ -99,32 +127,82 @@ def load_datasets(
     if data_cfg is None:
         data_cfg = DataConfig()
     splits = load_csv_splits(data_cfg)
+
+    def maybe_chunk(df: pd.DataFrame) -> pd.DataFrame:
+        if not data_cfg.chunk_overlap:
+            return df
+        rows: List[Dict[str, Any]] = []
+        for _, row in df.iterrows():
+            dialogue = str(row["dialogue"])
+            base_fname = str(row["fname"])
+            turns = ["#Person" + t for t in dialogue.split("#Person") if t.strip()]
+            chunks: List[List[str]] = []
+            cur: List[str] = []
+            for t in turns:
+                cand = " ".join(cur + [t])
+                if len(
+                    tokenizer(
+                        cand,
+                        add_special_tokens=False,
+                        return_attention_mask=False,
+                    )["input_ids"]
+                ) > encoder_max_len:
+                    if cur:
+                        chunks.append(cur)
+                        ids = tokenizer(
+                            " ".join(cur),
+                            add_special_tokens=False,
+                            return_attention_mask=False,
+                        )["input_ids"]
+                        keep = ids[-(encoder_max_len - data_cfg.chunk_overlap_tokens) :] if len(ids) > data_cfg.chunk_overlap_tokens else ids
+                        cur = tokenizer.decode(keep, skip_special_tokens=True).split()
+                    else:
+                        chunks.append([t])
+                        cur = []
+                else:
+                    cur.append(t)
+            if cur:
+                chunks.append(cur)
+            for idx, ch in enumerate(chunks):
+                rec = row.copy()
+                rec["dialogue"] = " ".join(ch)
+                rec["fname"] = f"{base_fname}_chunk{idx}"
+                rec["base_fname"] = base_fname
+                rows.append(rec)
+        return pd.DataFrame(rows)
+
+    train_df = maybe_chunk(splits["train"])
+    dev_df = maybe_chunk(splits["dev"])
+    test_df = maybe_chunk(splits["test"])
     train_ds = DialogueSummaryDataset(
-        splits["train"],
+        train_df,
         tokenizer,
         encoder_max_len,
         decoder_max_len,
         style_prompt=style_prompt,
         model_type=model_type,
         is_train=True,
+        truncate_tail=data_cfg.truncate_tail,
     )
     dev_ds = DialogueSummaryDataset(
-        splits["dev"],
+        dev_df,
         tokenizer,
         encoder_max_len,
         decoder_max_len,
         style_prompt=style_prompt,
         model_type=model_type,
         is_train=True,
+        truncate_tail=data_cfg.truncate_tail,
     )
     test_ds = DialogueSummaryDataset(
-        splits["test"],
+        test_df,
         tokenizer,
         encoder_max_len,
         decoder_max_len,
         style_prompt=style_prompt,
         model_type=model_type,
         is_train=False,
+        truncate_tail=data_cfg.truncate_tail,
     )
     return {"train": train_ds, "dev": dev_ds, "test": test_ds}
 

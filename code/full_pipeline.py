@@ -3,6 +3,8 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
+import re
+from pathlib import Path
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from dialogsum.data import DataConfig, load_csv_splits
@@ -15,6 +17,46 @@ from dialogsum.utils import (
     resolve_path,
 )
 from inference.generate import run_generation, run_generation_with_references
+
+def _merge_predictions(df: pd.DataFrame) -> pd.DataFrame:
+    def split_sentences(text: str):
+        parts = re.split(r"(?<=[.!?])\s+", text.strip())
+        return [p.strip() for p in parts if p.strip()]
+
+    def is_similar(a: str, b: str, thresh: float = 0.8) -> bool:
+        a_set = set(a.lower().split())
+        b_set = set(b.lower().split())
+        if not a_set or not b_set:
+            return False
+        return len(a_set & b_set) / len(a_set | b_set) >= thresh
+
+    def dedup(sentences):
+        kept = []
+        for s in sentences:
+            if any(is_similar(s, k) for k in kept):
+                continue
+            kept.append(s)
+            if len(kept) >= 3:
+                break
+        return kept
+
+    groups = {}
+    for _, row in df.iterrows():
+        base = row.get("base_fname", None)
+        fname = str(row["fname"])
+        if pd.isna(base) or base is None:
+            base = re.sub(r"_chunk\\d+$", "", fname)
+        groups.setdefault(base, []).append(str(row["summary"]))
+
+    merged_rows = []
+    for base, summaries in groups.items():
+        sentences = []
+        for s in summaries:
+            sentences.extend(split_sentences(s))
+        sentences = [s for s in sentences if s]
+        sentences = dedup(sentences)
+        merged_rows.append({"fname": base, "summary": " ".join(sentences)})
+    return pd.DataFrame(merged_rows)
 
 
 def parse_args():
@@ -137,6 +179,14 @@ def main():
     )
 
     data_cfg = DataConfig()
+    data_cfg.truncate_tail = cfg.get("data", {}).get("truncate_tail", False)
+    # optional custom data paths
+    dp = cfg.get("data_paths", {})
+    if dp:
+        data_cfg.train_path = dp.get("train", data_cfg.train_path)
+        data_cfg.dev_path = dp.get("dev", data_cfg.dev_path)
+        data_cfg.test_path = dp.get("test", data_cfg.test_path)
+
     splits = load_csv_splits(data_cfg)
     train_df = splits["train"]
     dev_df = splits["dev"]
@@ -162,6 +212,13 @@ def main():
     out_path = get_prediction_path(prediction_dir, filename)
     pred_df.to_csv(out_path, index=False, encoding="utf-8-sig")
     print(f"Saved prediction to {out_path}")
+
+    # chunk 예측을 base fname으로 병합 (원본 행 수로 복원)
+    merged_df = _merge_predictions(pred_df)
+    merged_filename = filename.replace(".csv", "_merged.csv")
+    merged_path = get_prediction_path(prediction_dir, merged_filename)
+    merged_df.to_csv(merged_path, index=False, encoding="utf-8-sig")
+    print(f"Saved merged prediction to {merged_path}")
 
     # 레퍼런스 포함 요약 결과 저장 (EDA용): dev + train
     full_pred_dir = resolve_path(cfg.get("paths", {}).get("full_pred_dir", "prediction_full"))

@@ -17,6 +17,57 @@ from .model_t5 import load_t5_model_and_tokenizer
 from .utils import ModelConfig, get_checkpoint_dir, set_seed
 
 
+class SamplePrintCallback(TrainerCallback):
+    """저장 주기마다 작은 샘플을 CLI에 출력."""
+
+    def __init__(
+        self,
+        sample_dataset,
+        tokenizer,
+        encoder_max_len: int,
+        decoder_max_len: int,
+        model_type: str,
+        save_steps: int,
+    ):
+        self.sample_dataset = sample_dataset
+        self.tokenizer = tokenizer
+        self.encoder_max_len = encoder_max_len
+        self.decoder_max_len = decoder_max_len
+        self.model_type = model_type
+        self.save_steps = save_steps
+
+    def on_log(self, args, state, control, **kwargs):
+        if state.global_step == 0 or self.save_steps <= 0:
+            return
+        if state.global_step % self.save_steps != 0:
+            return
+        model = kwargs.get("model")
+        if model is None:
+            return
+        model.eval()
+        import torch
+
+        # 최대 5개 샘플만 출력
+        for idx in range(min(5, len(self.sample_dataset))):
+            item = self.sample_dataset[idx]
+            input_ids = torch.tensor([item["input_ids"]]).to(model.device)
+            attention_mask = torch.tensor([item["attention_mask"]]).to(model.device)
+            with torch.no_grad():
+                gen_ids = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_length=self.decoder_max_len,
+                    num_beams=4,
+                )
+            pred = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
+            fname = item.get("fname", f"sample_{idx}")
+            dialogue = item.get("dialogue", "")
+            print(f"[step {state.global_step}] sample {idx} ({fname})")
+            print("dialogue:", str(dialogue)[:200].replace("\n", " "))
+            print("pred   :", pred[:200])
+        model.train()
+
+
 class CSVLoggerCallback(TrainerCallback):
     """간단한 CSV 로그 콜백 (eval 단계에서 ROUGE를 스텝별 기록)."""
 
@@ -121,6 +172,7 @@ def build_trainer(
     wandb_project: Optional[str] = None,
     wandb_run_name: Optional[str] = None,
     train_weights: Optional[torch.Tensor] = None,
+    extra_callbacks: Optional[list] = None,
 ) -> Tuple[Seq2SeqTrainer, Seq2SeqTrainingArguments]:
     logging_dir = f"{output_dir}/logs"
     report_to = ["wandb"] if use_wandb and wandb_project else []
@@ -179,6 +231,8 @@ def build_trainer(
         )
     csv_log_path = os.path.join(output_dir, "logs", "metrics.csv")
     callbacks.append(CSVLoggerCallback(csv_log_path))
+    if extra_callbacks:
+        callbacks.extend(extra_callbacks)
 
     trainer = WeightedSeq2SeqTrainer(
         model=model,
@@ -258,6 +312,16 @@ def run_sft_training(
         wandb_project=wandb_project,
         wandb_run_name=wandb_run_name,
         train_weights=train_weights,
+        extra_callbacks=[
+            SamplePrintCallback(
+                sample_dataset=datasets["dev"],
+                tokenizer=tokenizer,
+                encoder_max_len=encoder_max_len,
+                decoder_max_len=decoder_max_len,
+                model_type=model_cfg.model_type,
+                save_steps=model_cfg.save_steps,
+            ),
+        ],
     )
 
     trainer.train()

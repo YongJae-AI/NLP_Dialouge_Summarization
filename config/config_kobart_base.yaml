@@ -11,6 +11,9 @@ train:
   batch_size: 8
   num_train_epochs: 12
   fp16: true
+  eval_steps: 700
+  save_steps: 700
+  early_stopping_patience: 6
 
 style_prompt: null
 

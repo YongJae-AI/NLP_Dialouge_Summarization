@@ -1,5 +1,5 @@
 model:
-  name: 42dot_LLM/42dot_LLM-SFT-1.3B
+  name: 42dot/42dot_LLM-SFT-1.3B
 
 data:
   train_path: /root/NLP_Dialouge_Summarization/data/data/train.csv
@@ -14,9 +14,9 @@ style_prompt: "질문: 아래 한국어 대화의 핵심 내용을 간결한 요
 train:
   learning_rate: 0.0002
   num_train_epochs: 5
-  per_device_train_batch_size: 1
-  per_device_eval_batch_size: 1
-  gradient_accumulation_steps: 16
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
   warmup_ratio: 0.03
   weight_decay: 0.1
   lora_r: 64

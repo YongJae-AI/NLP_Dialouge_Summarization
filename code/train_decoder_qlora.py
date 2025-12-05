@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
@@ -18,7 +19,10 @@ from transformers import (
     TrainingArguments,
 )
 
-from dialogsum.data import chunk_dialogues
+# ensure absolute import for local package
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT_DIR / "src"))
+from dialogsum.data import chunk_dialogues  # noqa: E402
 
 
 @dataclass
@@ -118,11 +122,22 @@ def prepare_data(tokenizer, cfg: QLoRAConfig) -> Dict[str, Dataset]:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="절대경로 YAML 설정 파일")
+    parser.add_argument(
+        "--max_steps",
+        type=int,
+        default=None,
+        help="스모크 테스트 등 짧은 학습용 max_steps override",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    if args.max_steps is not None:
+        cfg.max_steps = args.max_steps
+        cfg.num_train_epochs = 1
 
-    tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
+    auth_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model_name, token=auth_token, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
@@ -141,6 +156,7 @@ def main():
         quantization_config=bnb_config,
         device_map="auto",
         trust_remote_code=True,
+        token=auth_token,
     )
 
     lora_config = LoraConfig(

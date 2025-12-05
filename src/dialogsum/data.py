@@ -55,6 +55,8 @@ class DialogueSummaryDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         row = self.df.iloc[idx]
+        base_fname = str(row.get("base_fname", row.get("fname", f"idx_{idx}")))
+        chunk_id = int(row.get("chunk_id", 0)) if "chunk_id" in row and pd.notna(row["chunk_id"]) else 0
         dialogue = str(row["dialogue"])
         if self.truncate_tail:
             dialogue = self._trim_dialogue(dialogue)
@@ -108,7 +110,10 @@ class DialogueSummaryDataset(Dataset):
         # fname는 학습/검증 단계에서는 필요 없으므로,
         # is_train=False (주로 inference)일 때만 포함한다.
         if not self.is_train:
-            model_inputs["fname"] = row.get("fname", f"idx_{idx}")
+            model_inputs["fname"] = base_fname
+            model_inputs["base_fname"] = base_fname
+            model_inputs["chunk_id"] = chunk_id
+            model_inputs["row_idx"] = int(row.get("row_idx", idx))
         return model_inputs
 
 
@@ -129,6 +134,69 @@ def load_csv_splits(cfg: DataConfig) -> Dict[str, pd.DataFrame]:
     return {"train": train_df, "dev": dev_df, "test": test_df}
 
 
+def chunk_dialogues(
+    df: pd.DataFrame,
+    tokenizer: PreTrainedTokenizerBase,
+    encoder_max_len: int,
+    chunk_overlap: bool,
+    chunk_overlap_tokens: int,
+) -> pd.DataFrame:
+    """
+    턴 단위로 대화를 분할해 enc 길이를 넘지 않도록 잘라내고,
+    overlap 구간을 chunk_overlap_tokens 만큼 유지한다.
+    - fname은 원본 이름 그대로 유지하고, chunk_id/base_fname/row_idx를 추가한다.
+    """
+    if not chunk_overlap:
+        df = df.copy()
+        df["chunk_id"] = 0
+        df["base_fname"] = df["fname"]
+        df["row_idx"] = df.index
+        return df
+
+    rows: List[Dict[str, Any]] = []
+    for _, row in df.iterrows():
+        dialogue = str(row["dialogue"])
+        base_fname = str(row["fname"])
+        row_idx = row.name
+        turns = ["#Person" + t for t in dialogue.split("#Person") if t.strip()]
+        chunks: List[List[str]] = []
+        cur: List[str] = []
+        for t in turns:
+            cand = " ".join(cur + [t])
+            if len(
+                tokenizer(
+                    cand,
+                    add_special_tokens=False,
+                    return_attention_mask=False,
+                )["input_ids"]
+            ) > encoder_max_len:
+                if cur:
+                    chunks.append(cur)
+                    ids = tokenizer(
+                        " ".join(cur),
+                        add_special_tokens=False,
+                        return_attention_mask=False,
+                    )["input_ids"]
+                    keep = ids[-(encoder_max_len - chunk_overlap_tokens) :] if len(ids) > chunk_overlap_tokens else ids
+                    cur = tokenizer.decode(keep, skip_special_tokens=True).split()
+                else:
+                    chunks.append([t])
+                    cur = []
+            else:
+                cur.append(t)
+        if cur:
+            chunks.append(cur)
+        for idx, ch in enumerate(chunks):
+            rec = row.copy()
+            rec["dialogue"] = " ".join(ch)
+            rec["fname"] = base_fname
+            rec["base_fname"] = base_fname
+            rec["chunk_id"] = idx
+            rec["row_idx"] = row_idx
+            rows.append(rec)
+    return pd.DataFrame(rows)
+
+
 def load_datasets(
     tokenizer: PreTrainedTokenizerBase,
     encoder_max_len: int,
@@ -141,53 +209,27 @@ def load_datasets(
     if data_cfg is None:
         data_cfg = DataConfig()
     splits = load_csv_splits(data_cfg)
-
-    def maybe_chunk(df: pd.DataFrame) -> pd.DataFrame:
-        if not data_cfg.chunk_overlap:
-            return df
-        rows: List[Dict[str, Any]] = []
-        for _, row in df.iterrows():
-            dialogue = str(row["dialogue"])
-            base_fname = str(row["fname"])
-            turns = ["#Person" + t for t in dialogue.split("#Person") if t.strip()]
-            chunks: List[List[str]] = []
-            cur: List[str] = []
-            for t in turns:
-                cand = " ".join(cur + [t])
-                if len(
-                    tokenizer(
-                        cand,
-                        add_special_tokens=False,
-                        return_attention_mask=False,
-                    )["input_ids"]
-                ) > encoder_max_len:
-                    if cur:
-                        chunks.append(cur)
-                        ids = tokenizer(
-                            " ".join(cur),
-                            add_special_tokens=False,
-                            return_attention_mask=False,
-                        )["input_ids"]
-                        keep = ids[-(encoder_max_len - data_cfg.chunk_overlap_tokens) :] if len(ids) > data_cfg.chunk_overlap_tokens else ids
-                        cur = tokenizer.decode(keep, skip_special_tokens=True).split()
-                    else:
-                        chunks.append([t])
-                        cur = []
-                else:
-                    cur.append(t)
-            if cur:
-                chunks.append(cur)
-            for idx, ch in enumerate(chunks):
-                rec = row.copy()
-                rec["dialogue"] = " ".join(ch)
-                rec["fname"] = f"{base_fname}_chunk{idx}"
-                rec["base_fname"] = base_fname
-                rows.append(rec)
-        return pd.DataFrame(rows)
-
-    train_df = maybe_chunk(splits["train"])
-    dev_df = maybe_chunk(splits["dev"])
-    test_df = maybe_chunk(splits["test"])
+    train_df = chunk_dialogues(
+        splits["train"],
+        tokenizer=tokenizer,
+        encoder_max_len=encoder_max_len,
+        chunk_overlap=data_cfg.chunk_overlap,
+        chunk_overlap_tokens=data_cfg.chunk_overlap_tokens,
+    )
+    dev_df = chunk_dialogues(
+        splits["dev"],
+        tokenizer=tokenizer,
+        encoder_max_len=encoder_max_len,
+        chunk_overlap=data_cfg.chunk_overlap,
+        chunk_overlap_tokens=data_cfg.chunk_overlap_tokens,
+    )
+    test_df = chunk_dialogues(
+        splits["test"],
+        tokenizer=tokenizer,
+        encoder_max_len=encoder_max_len,
+        chunk_overlap=data_cfg.chunk_overlap,
+        chunk_overlap_tokens=data_cfg.chunk_overlap_tokens,
+    )
     train_ds = DialogueSummaryDataset(
         train_df,
         tokenizer,

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from dialogsum.data import DataConfig, load_csv_splits
+from dialogsum.data import DataConfig, chunk_dialogues, load_csv_splits
 from dialogsum.train import run_sft_training
 from dialogsum.utils import (
     ModelConfig,
@@ -41,11 +41,10 @@ def _merge_predictions(df: pd.DataFrame) -> pd.DataFrame:
         return kept
 
     groups = {}
+    base_names = df["base_fname"] if "base_fname" in df.columns else df["fname"]
+    expected = len(pd.unique(base_names))
     for _, row in df.iterrows():
-        base = row.get("base_fname", None)
-        fname = str(row["fname"])
-        if pd.isna(base) or base is None:
-            base = re.sub(r"_chunk\\d+$", "", fname)
+        base = str(row.get("base_fname", row["fname"]))
         groups.setdefault(base, []).append(str(row["summary"]))
 
     merged_rows = []
@@ -56,7 +55,12 @@ def _merge_predictions(df: pd.DataFrame) -> pd.DataFrame:
         sentences = [s for s in sentences if s]
         sentences = dedup(sentences)
         merged_rows.append({"fname": base, "summary": " ".join(sentences)})
-    return pd.DataFrame(merged_rows)
+    merged_df = pd.DataFrame(merged_rows)
+    if len(merged_df) != expected:
+        raise ValueError(
+            f"병합된 예측 개수({len(merged_df)})가 기대 개수({expected})와 다릅니다. chunk 처리/중복 제거 로직을 확인하세요."
+        )
+    return merged_df
 
 
 def parse_args():
@@ -200,6 +204,8 @@ def main():
 
     data_cfg = DataConfig()
     data_cfg.truncate_tail = cfg.get("data", {}).get("truncate_tail", False)
+    data_cfg.chunk_overlap = cfg.get("data", {}).get("chunk_overlap", False)
+    data_cfg.chunk_overlap_tokens = cfg.get("data", {}).get("chunk_overlap_tokens", data_cfg.chunk_overlap_tokens)
     # optional custom data paths
     dp = cfg.get("data_paths", {})
     if dp:
@@ -208,9 +214,15 @@ def main():
         data_cfg.test_path = dp.get("test", data_cfg.test_path)
 
     splits = load_csv_splits(data_cfg)
-    train_df = splits["train"]
-    dev_df = splits["dev"]
-    test_df = splits["test"]
+    chunk_kwargs = dict(
+        tokenizer=tokenizer,
+        encoder_max_len=model_cfg.encoder_max_len,
+        chunk_overlap=data_cfg.chunk_overlap,
+        chunk_overlap_tokens=data_cfg.chunk_overlap_tokens,
+    )
+    train_df = chunk_dialogues(splits["train"], **chunk_kwargs)
+    dev_df = chunk_dialogues(splits["dev"], **chunk_kwargs)
+    test_df = chunk_dialogues(splits["test"], **chunk_kwargs)
 
     pred_df = run_generation(
         model=model,

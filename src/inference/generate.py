@@ -30,10 +30,16 @@ def run_generation(
     model.eval()
     all_summaries: List[str] = []
     fnames: List[str] = []
+    base_fnames: List[str] = []
+    chunk_ids: List[int] = []
+    row_indices: List[int] = []
 
     for i in range(0, len(dataset), batch_size):
         batch = [dataset[j] for j in range(i, min(i + batch_size, len(dataset)))]
         fnames.extend([b["fname"] for b in batch])
+        base_fnames.extend([b.get("base_fname", b["fname"]) for b in batch])
+        chunk_ids.extend([int(b.get("chunk_id", 0)) for b in batch])
+        row_indices.extend([int(b.get("row_idx", idx)) for idx, b in enumerate(batch)])
         input_ids = [b["input_ids"] for b in batch]
         attention_mask = [b["attention_mask"] for b in batch]
 
@@ -53,7 +59,15 @@ def run_generation(
         preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
         all_summaries.extend(preds)
 
-    return pd.DataFrame({"fname": fnames, "summary": all_summaries})
+    return pd.DataFrame(
+        {
+            "fname": fnames,
+            "base_fname": base_fnames,
+            "chunk_id": chunk_ids,
+            "row_idx": row_indices,
+            "summary": all_summaries,
+        }
+    )
 
 
 def run_generation_with_references(
@@ -86,6 +100,9 @@ def run_generation_with_references(
         input_ids = [b["input_ids"] for b in batch]
         attention_mask = [b["attention_mask"] for b in batch]
         fnames = [b["fname"] for b in batch]
+        base_fnames = [b.get("base_fname", b["fname"]) for b in batch]
+        chunk_ids = [int(b.get("chunk_id", 0)) for b in batch]
+        row_indices = [int(b.get("row_idx", idx)) for idx, b in enumerate(batch)]
 
         import torch
 
@@ -101,11 +118,22 @@ def run_generation_with_references(
             )
 
         preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
-        for fname, pred in zip(fnames, preds):
-            row = df.loc[df["fname"] == fname].iloc[0]
+        for fname, base_fname, chunk_id, row_idx, pred in zip(
+            fnames, base_fnames, chunk_ids, row_indices, preds
+        ):
+            matching_rows = df.loc[
+                (df.get("row_idx", df.index) == row_idx)
+                & (df.get("chunk_id", 0) == chunk_id)
+            ]
+            if not matching_rows.empty:
+                row = matching_rows.iloc[0]
+            else:
+                row = df.iloc[row_idx]
             outputs.append(
                 {
                     "fname": fname,
+                    "base_fname": base_fname,
+                    "chunk_id": chunk_id,
                     "dialogue": str(row["dialogue"]),
                     "gold_summary": str(row.get("summary", "")),
                     "pred_summary": pred,

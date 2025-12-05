@@ -3,7 +3,7 @@ model:
   name: gogamza/kobart-base-v1
 
 data:
-  encoder_max_len: 1024
+  encoder_max_len: 896
   decoder_max_len: 80
 
 train:
@@ -13,7 +13,7 @@ train:
   fp16: true
   eval_steps: 700
   save_steps: 700
-  early_stopping_patience: 6
+  early_stopping_patience: 4
 
 style_prompt: null
 

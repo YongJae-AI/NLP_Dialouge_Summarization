@@ -7,36 +7,20 @@ set -euo pipefail
 INTERVAL="${INTERVAL:-5}"  # 초 단위 갱신 주기 (환경변수로 조정 가능)
 
 while true; do
-    clear
-    echo "==== Resource Monitor ($(date '+%F %T')) ===="
-    echo "[GPU]"
+    ts="$(date '+%F %T')"
+    echo "[$ts] GPU mem/usage"
     if command -v nvidia-smi >/dev/null 2>&1; then
-        nvidia-smi --query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu,utilization.memory --format=csv
+        nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu --format=csv,noheader
     else
         echo "nvidia-smi not found"
     fi
 
-    echo
-    echo "[CPU/RAM]"
-    if command -v htop >/dev/null 2>&1; then
-        echo "Tip: run htop in another terminal for live per-core view"
-    fi
-    free -h
-    uptime
+    echo "[$ts] CPU load / RAM"
+    uptime | awk '{print "load:", $(NF-2), $(NF-1), $NF}'
+    free -h | awk 'NR==2{print "ram:", $3 "/" $2}'
 
-    echo
-    echo "[Disk]"
-    df -h /root
-
-    echo
-    echo "[PyTorch CUDA memory summary (if CUDA available)]"
-    python - <<'PY' 2>/dev/null || echo "PyTorch not available in this shell/env"
-import torch
-if torch.cuda.is_available():
-    print(torch.cuda.memory_summary())
-else:
-    print("CUDA not available")
-PY
+    echo "[$ts] Disk /root"
+    df -h /root | awk 'NR==2{print "disk:", $3 "/" $2, "used"}'
 
     sleep "${INTERVAL}"
 done

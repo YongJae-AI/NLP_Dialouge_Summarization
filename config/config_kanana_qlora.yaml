@@ -4,8 +4,8 @@ model:
 data:
   train_path: /root/NLP_Dialouge_Summarization/data/data/train.csv
   dev_path: /root/NLP_Dialouge_Summarization/data/data/dev.csv
-  encoder_max_len: 768
-  decoder_max_len: 64
+  encoder_max_len: 896
+  decoder_max_len: 80
   chunk_overlap: true
   chunk_overlap_tokens: 128
 
@@ -13,7 +13,7 @@ style_prompt: "질문: 아래 한국어 대화의 핵심 내용을 간결한 요
 
 train:
   learning_rate: 0.0002
-  num_train_epochs: 5
+  num_train_epochs: 12
   per_device_train_batch_size: 4
   per_device_eval_batch_size: 4
   gradient_accumulation_steps: 4
@@ -27,6 +27,7 @@ train:
   logging_steps: 50
   bf16: true
   max_steps: null
+  early_stopping_patience: 4
 
 paths:
   checkpoint_dir: /root/NLP_Dialouge_Summarization/checkpoints/kanana-qlora

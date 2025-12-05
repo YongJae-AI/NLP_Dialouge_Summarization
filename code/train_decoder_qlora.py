@@ -15,6 +15,7 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
+    EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
 )
@@ -46,6 +47,7 @@ class QLoRAConfig:
     logging_steps: int
     bf16: bool
     max_steps: Optional[int]
+    early_stopping_patience: Optional[int]
     output_dir: str
     train_path: str
     dev_path: str
@@ -81,6 +83,7 @@ def load_config(path: str) -> QLoRAConfig:
         logging_steps=cfg["train"].get("logging_steps", 50),
         bf16=cfg["train"].get("bf16", True),
         max_steps=cfg["train"].get("max_steps"),
+        early_stopping_patience=cfg["train"].get("early_stopping_patience"),
         output_dir=str(output_dir),
         train_path=str(train_path),
         dev_path=str(dev_path),
@@ -119,6 +122,46 @@ def prepare_data(tokenizer, cfg: QLoRAConfig) -> Dict[str, Dataset]:
     }
 
 
+def load_model_and_tokenizer(model_name: str, bnb_config: BitsAndBytesConfig, auth_token: Optional[str]):
+    """
+    모델별 공식 로딩 가이드를 반영한 분기 로더.
+    """
+    common_model_kwargs = dict(
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True,
+        token=auth_token,
+    )
+
+    if model_name.startswith("naver-hyperclovax/"):
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=auth_token, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(model_name, **common_model_kwargs)
+    elif model_name.startswith("kakaocorp/kanana-"):
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=auth_token, trust_remote_code=True, padding_side="left")
+        tokenizer.pad_token = tokenizer.eos_token
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.bfloat16,
+            **common_model_kwargs,
+        )
+    elif model_name.startswith("beomi/gemma-ko-"):
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=auth_token, trust_remote_code=True)
+        tokenizer.pad_token = tokenizer.eos_token
+        model = AutoModelForCausalLM.from_pretrained(model_name, **common_model_kwargs)
+    elif model_name.startswith("42dot/42dot_LLM-SFT-1.3B"):
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=auth_token, trust_remote_code=True)
+        tokenizer.pad_token = tokenizer.eos_token
+        model = AutoModelForCausalLM.from_pretrained(model_name, **common_model_kwargs)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=auth_token, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(model_name, **common_model_kwargs)
+
+    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = tokenizer.padding_side or "right"
+    return model, tokenizer
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="절대경로 YAML 설정 파일")
@@ -135,15 +178,6 @@ def main():
         cfg.max_steps = args.max_steps
         cfg.num_train_epochs = 1
 
-    auth_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-
-    tokenizer = AutoTokenizer.from_pretrained(cfg.model_name, token=auth_token, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "right"
-
-    datasets = prepare_data(tokenizer, cfg)
-
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_use_double_quant=True,
@@ -151,13 +185,10 @@ def main():
         bnb_4bit_compute_dtype=torch.bfloat16 if cfg.bf16 else torch.float16,
     )
 
-    model = AutoModelForCausalLM.from_pretrained(
-        cfg.model_name,
-        quantization_config=bnb_config,
-        device_map="auto",
-        trust_remote_code=True,
-        token=auth_token,
-    )
+    auth_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    model, tokenizer = load_model_and_tokenizer(cfg.model_name, bnb_config, auth_token)
+
+    datasets = prepare_data(tokenizer, cfg)
 
     lora_config = LoraConfig(
         r=cfg.lora_r,
@@ -165,9 +196,10 @@ def main():
         lora_dropout=cfg.lora_dropout,
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules=None,  # let PEFT infer; adjust per model if needed
+        target_modules=None if cfg.model_name.startswith("beomi/gemma-ko-") else ["q_proj", "k_proj", "v_proj"],
     )
     model = get_peft_model(model, lora_config)
+    model.enable_input_require_grads()
     model.config.use_cache = False
 
     def tokenize_fn(batch):
@@ -186,7 +218,7 @@ def main():
     training_args = TrainingArguments(
         output_dir=cfg.output_dir,
         learning_rate=cfg.learning_rate,
-        num_train_epochs=cfg.num_train_epochs,
+        num_train_epochs=cfg.num_train_epochs if cfg.num_train_epochs is not None else 100,
         per_device_train_batch_size=cfg.per_device_train_batch_size,
         per_device_eval_batch_size=cfg.per_device_eval_batch_size,
         gradient_accumulation_steps=cfg.gradient_accumulation_steps,
@@ -198,10 +230,11 @@ def main():
         save_steps=cfg.save_steps,
         eval_steps=cfg.eval_steps,
         bf16=cfg.bf16,
-        max_steps=cfg.max_steps if cfg.max_steps else -1,
+        max_steps=-1,
         lr_scheduler_type="cosine",
         report_to="none",
         gradient_checkpointing=True,
+        load_best_model_at_end=True,
     )
 
     trainer = Trainer(
@@ -211,6 +244,7 @@ def main():
         eval_dataset=tokenized_dev,
         data_collator=data_collator,
         tokenizer=tokenizer,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=cfg.early_stopping_patience or 4)],
     )
     trainer.train()
     trainer.save_model(cfg.output_dir)

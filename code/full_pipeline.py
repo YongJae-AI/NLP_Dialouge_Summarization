@@ -223,6 +223,7 @@ def main():
     train_df = chunk_dialogues(splits["train"], **chunk_kwargs)
     dev_df = chunk_dialogues(splits["dev"], **chunk_kwargs)
     test_df = chunk_dialogues(splits["test"], **chunk_kwargs)
+    test_df_original = splits["test"]
 
     pred_df = run_generation(
         model=model,
@@ -236,21 +237,40 @@ def main():
         beam_size=4,
     )
 
+    # 파일명 구성
     if args.prediction_name:
-        filename = args.prediction_name
+        chunked_filename = args.prediction_name
     else:
-        filename = f"{run_id}.csv"
+        chunked_filename = f"{run_id}_chunked.csv"
 
-    out_path = get_prediction_path(prediction_dir, filename)
-    pred_df.to_csv(out_path, index=False, encoding="utf-8-sig")
-    print(f"Saved prediction to {out_path}")
+    # chunked prediction 저장
+    chunked_path = get_prediction_path(prediction_dir, chunked_filename)
+    pred_df.to_csv(chunked_path, index=False, encoding="utf-8-sig")
+    print(f"Saved chunked prediction to {chunked_path}")
 
     # chunk 예측을 base fname으로 병합 (원본 행 수로 복원)
     merged_df = _merge_predictions(pred_df)
-    merged_filename = filename.replace(".csv", "_merged.csv")
+    merged_filename = chunked_filename.replace(".csv", "_merged.csv")
     merged_path = get_prediction_path(prediction_dir, merged_filename)
     merged_df.to_csv(merged_path, index=False, encoding="utf-8-sig")
     print(f"Saved merged prediction to {merged_path}")
+
+    # no-overlap (원본 test) 예측 추가 저장
+    nooverlap_df = run_generation(
+        model=model,
+        tokenizer=tokenizer,
+        test_df=test_df_original,
+        encoder_max_len=model_cfg.encoder_max_len,
+        decoder_max_len=model_cfg.decoder_max_len,
+        style_prompt=model_cfg.style_prompt,
+        model_type=model_cfg.model_type,
+        batch_size=model_cfg.batch_size,
+        beam_size=4,
+    )
+    nooverlap_filename = chunked_filename.replace("_chunked", "_nooverlap")
+    nooverlap_path = get_prediction_path(prediction_dir, nooverlap_filename)
+    nooverlap_df.to_csv(nooverlap_path, index=False, encoding="utf-8-sig")
+    print(f"Saved no-overlap prediction to {nooverlap_path}")
 
     # 레퍼런스 포함 요약 결과 저장 (EDA용): dev + train
     full_pred_dir = resolve_path(cfg.get("paths", {}).get("full_pred_dir", "prediction_full"))

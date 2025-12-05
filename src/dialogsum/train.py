@@ -210,7 +210,7 @@ def build_trainer(
         learning_rate=cfg.learning_rate,
         per_device_train_batch_size=cfg.batch_size,
         per_device_eval_batch_size=cfg.batch_size,
-        num_train_epochs=cfg.num_train_epochs,
+        num_train_epochs=cfg.num_train_epochs if cfg.num_train_epochs is not None else 100,
         weight_decay=0.01,
         save_total_limit=2,
         predict_with_generate=True,
@@ -223,7 +223,7 @@ def build_trainer(
         metric_for_best_model="eval_rougeL",
         run_name=wandb_run_name,
         report_to=report_to,
-        max_steps=cfg.max_steps if cfg.max_steps is not None else -1,
+        max_steps=-1,
         overwrite_output_dir=True,
     )
 

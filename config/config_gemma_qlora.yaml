@@ -13,7 +13,7 @@ style_prompt: "질문: 아래 한국어 대화의 핵심 내용을 간결한 요
 
 train:
   learning_rate: 0.00015
-  num_train_epochs: 12
+  num_train_epochs: 4
   per_device_train_batch_size: 4
   per_device_eval_batch_size: 4
   gradient_accumulation_steps: 4

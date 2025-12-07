@@ -266,10 +266,9 @@ def main():
         model_type=model_cfg.model_type,
         batch_size=model_cfg.batch_size,
         beam_size=4,
-        max_new_tokens=96,
-        min_length=30,
-        repetition_penalty=1.1,
-        length_penalty=1.0,
+        max_new_tokens=80,
+        min_length=0,
+        no_repeat_ngram_size=3,
     )
 
     # 파일명 구성
@@ -303,10 +302,9 @@ def main():
         model_type=model_cfg.model_type,
         batch_size=model_cfg.batch_size,
         beam_size=4,
-        max_new_tokens=96,
-        min_length=30,
-        repetition_penalty=1.1,
-        length_penalty=1.0,
+        max_new_tokens=80,
+        min_length=0,
+        no_repeat_ngram_size=3,
     )
     # 제출 규격: fname, summary 두 컬럼만 유지
     nooverlap_df = nooverlap_df[["fname", "summary"]]

@@ -130,8 +130,9 @@ def main():
         model_type="decoder-only",
         batch_size=args.batch_size,
         beam_size=4,
-        repetition_penalty=1.1,
-        length_penalty=1.0,
+        max_new_tokens=80,
+        min_length=0,
+        no_repeat_ngram_size=3,
     )
     chunked_path = os.path.join(prediction_dir, f"{base_filename}_chunked.csv")
     chunked_df.to_csv(chunked_path, index=False, encoding="utf-8-sig")
@@ -153,8 +154,9 @@ def main():
         model_type="decoder-only",
         batch_size=args.batch_size,
         beam_size=4,
-        repetition_penalty=1.1,
-        length_penalty=1.0,
+        max_new_tokens=80,
+        min_length=0,
+        no_repeat_ngram_size=3,
     )
     nooverlap_df = nooverlap_df[["fname", "summary"]]
     nooverlap_path = os.path.join(prediction_dir, f"{base_filename}_nooverlap.csv")

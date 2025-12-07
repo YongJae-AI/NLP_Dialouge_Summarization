@@ -18,10 +18,9 @@ def run_generation(
     model_type: str,
     batch_size: int = 8,
     beam_size: int = 4,
-    max_new_tokens: int = 96,
-    min_length: int = 30,
-    repetition_penalty: float = 1.1,
-    length_penalty: float = 1.0,
+    max_new_tokens: int = 80,
+    min_length: int = 0,
+    no_repeat_ngram_size: int = 3,
 ) -> pd.DataFrame:
     dataset = DialogueSummaryDataset(
         test_df,
@@ -71,8 +70,7 @@ def run_generation(
                 max_new_tokens=max_new_tokens,
                 min_length=min_length,
                 num_beams=beam_size,
-                repetition_penalty=repetition_penalty,
-                length_penalty=length_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
             )
 
         raw_preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
@@ -110,10 +108,9 @@ def run_generation_with_references(
     model_type: str,
     batch_size: int = 8,
     beam_size: int = 4,
-    max_new_tokens: int = 96,
-    min_length: int = 30,
-    repetition_penalty: float = 1.1,
-    length_penalty: float = 1.0,
+    max_new_tokens: int = 80,
+    min_length: int = 0,
+    no_repeat_ngram_size: int = 3,
 ) -> pd.DataFrame:
     """dev처럼 정답 summary가 있는 데이터셋에서 요약 + 참조를 함께 저장."""
     dataset = DialogueSummaryDataset(
@@ -160,8 +157,7 @@ def run_generation_with_references(
                 max_new_tokens=max_new_tokens,
                 min_length=min_length,
                 num_beams=beam_size,
-                repetition_penalty=repetition_penalty,
-                length_penalty=length_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
             )
 
         raw_preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)

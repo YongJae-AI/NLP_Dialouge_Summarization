@@ -47,6 +47,8 @@ class ModelConfig:
     eval_steps: int = 500
     save_steps: int = 500
     style_prompt: str | None = None
+    encoder_template: str | None = None  # dialogue를 {dialogue}에 주입하는 템플릿 (style_prompt 대체용)
+    decoder_prefix: str | None = None  # inference 시 CoT prefix 등 디코더 시작 프롬프트
     use_wandb: bool = False
     wandb_project: str | None = None
     wandb_entity: str | None = None

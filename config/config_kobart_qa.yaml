@@ -3,7 +3,7 @@ model:
   name: gogamza/kobart-base-v1
 
 data:
-  encoder_max_len: 896
+  encoder_max_len: 1024
   decoder_max_len: 80
   truncate_tail: false
   chunk_overlap: true

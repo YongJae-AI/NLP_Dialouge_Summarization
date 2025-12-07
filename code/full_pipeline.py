@@ -1,11 +1,16 @@
 import argparse
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import re
 from pathlib import Path
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+# ensure local package import
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT / "src"))
 
 from dialogsum.data import DataConfig, chunk_dialogues, load_csv_splits
 from dialogsum.train import run_sft_training
@@ -16,6 +21,7 @@ from dialogsum.utils import (
     load_yaml_config,
     resolve_path,
 )
+from dialogsum.templates import encoder_templates, cot_templates
 from inference.generate import run_generation, run_generation_with_references
 
 def _merge_predictions(df: pd.DataFrame) -> pd.DataFrame:
@@ -131,6 +137,18 @@ def parse_args():
         default=None,
         help="KD mixing weight (0-1).",
     )
+    parser.add_argument(
+        "--enc_key",
+        type=str,
+        default=None,
+        help="Encoder template key (see src/dialogsum/templates.py).",
+    )
+    parser.add_argument(
+        "--cot_key",
+        type=str,
+        default=None,
+        help="Decoder CoT template key (see src/dialogsum/templates.py).",
+    )
     return parser.parse_args()
 
 
@@ -159,6 +177,8 @@ def main():
         eval_steps=cfg["train"].get("eval_steps", 500),
         save_steps=cfg["train"].get("save_steps", 500),
         style_prompt=cfg.get("style_prompt", None),
+        encoder_template=cfg.get("encoder_template", None),
+        decoder_prefix=cfg.get("decoder_prefix", None),
         use_wandb=cfg.get("wandb", {}).get("use_wandb", False),
         wandb_project=cfg.get("wandb", {}).get("project", None),
         wandb_entity=cfg.get("wandb", {}).get("entity", None),
@@ -186,21 +206,14 @@ def main():
         model_cfg.save_steps = args.save_steps
     if args.patience is not None:
         model_cfg.early_stopping_patience = args.patience
-
-    model, tokenizer = run_sft_training(
-        model_cfg=model_cfg,
-        encoder_max_len=model_cfg.encoder_max_len,
-        decoder_max_len=model_cfg.decoder_max_len,
-        style_prompt=model_cfg.style_prompt,
-        checkpoint_base_dir=checkpoint_dir,
-        use_wandb=model_cfg.use_wandb,
-        wandb_project=model_cfg.wandb_project,
-        wandb_run_name=model_cfg.wandb_run_name,
-        len_weight=args.len_weight,
-        len_top_pct=args.len_top_pct,
-        teacher_preds_path=model_cfg.teacher_preds_path,
-        kd_alpha=model_cfg.kd_alpha,
-    )
+    if args.enc_key:
+        if args.enc_key not in encoder_templates:
+            raise ValueError(f"Unknown enc_key={args.enc_key}")
+        model_cfg.encoder_template = encoder_templates[args.enc_key]
+    if args.cot_key:
+        if args.cot_key not in cot_templates:
+            raise ValueError(f"Unknown cot_key={args.cot_key}")
+        model_cfg.decoder_prefix = cot_templates[args.cot_key]
 
     data_cfg = DataConfig()
     data_cfg.truncate_tail = cfg.get("data", {}).get("truncate_tail", False)
@@ -212,6 +225,22 @@ def main():
         data_cfg.train_path = dp.get("train", data_cfg.train_path)
         data_cfg.dev_path = dp.get("dev", data_cfg.dev_path)
         data_cfg.test_path = dp.get("test", data_cfg.test_path)
+
+    model, tokenizer = run_sft_training(
+        model_cfg=model_cfg,
+        encoder_max_len=model_cfg.encoder_max_len,
+        decoder_max_len=model_cfg.decoder_max_len,
+        style_prompt=model_cfg.style_prompt,
+        checkpoint_base_dir=checkpoint_dir,
+        data_cfg=data_cfg,
+        use_wandb=model_cfg.use_wandb,
+        wandb_project=model_cfg.wandb_project,
+        wandb_run_name=model_cfg.wandb_run_name,
+        len_weight=args.len_weight,
+        len_top_pct=args.len_top_pct,
+        teacher_preds_path=model_cfg.teacher_preds_path,
+        kd_alpha=model_cfg.kd_alpha,
+    )
 
     splits = load_csv_splits(data_cfg)
     chunk_kwargs = dict(
@@ -232,9 +261,15 @@ def main():
         encoder_max_len=model_cfg.encoder_max_len,
         decoder_max_len=model_cfg.decoder_max_len,
         style_prompt=model_cfg.style_prompt,
+        encoder_template=model_cfg.encoder_template,
+        decoder_prefix=model_cfg.decoder_prefix,
         model_type=model_cfg.model_type,
         batch_size=model_cfg.batch_size,
         beam_size=4,
+        max_new_tokens=96,
+        min_length=30,
+        repetition_penalty=1.1,
+        length_penalty=1.0,
     )
 
     # 파일명 구성
@@ -263,10 +298,18 @@ def main():
         encoder_max_len=model_cfg.encoder_max_len,
         decoder_max_len=model_cfg.decoder_max_len,
         style_prompt=model_cfg.style_prompt,
+        encoder_template=model_cfg.encoder_template,
+        decoder_prefix=model_cfg.decoder_prefix,
         model_type=model_cfg.model_type,
         batch_size=model_cfg.batch_size,
         beam_size=4,
+        max_new_tokens=96,
+        min_length=30,
+        repetition_penalty=1.1,
+        length_penalty=1.0,
     )
+    # 제출 규격: fname, summary 두 컬럼만 유지
+    nooverlap_df = nooverlap_df[["fname", "summary"]]
     nooverlap_filename = chunked_filename.replace("_chunked", "_nooverlap")
     nooverlap_path = get_prediction_path(prediction_dir, nooverlap_filename)
     nooverlap_df.to_csv(nooverlap_path, index=False, encoding="utf-8-sig")
@@ -284,29 +327,17 @@ def main():
         encoder_max_len=model_cfg.encoder_max_len,
         decoder_max_len=model_cfg.decoder_max_len,
         style_prompt=model_cfg.style_prompt,
+        encoder_template=model_cfg.encoder_template,
+        decoder_prefix=model_cfg.decoder_prefix,
         model_type=model_cfg.model_type,
         batch_size=model_cfg.batch_size,
         beam_size=4,
+        max_new_tokens=96,
+        min_length=30,
     )
     dev_out_path = os.path.join(full_pred_dir, f"{run_id}_dev_full.csv")
     dev_pred_df.to_csv(dev_out_path, index=False, encoding="utf-8-sig")
     print(f"Saved dev predictions with references to {dev_out_path}")
-
-    # train
-    train_pred_df = run_generation_with_references(
-        model=model,
-        tokenizer=tokenizer,
-        df=train_df,
-        encoder_max_len=model_cfg.encoder_max_len,
-        decoder_max_len=model_cfg.decoder_max_len,
-        style_prompt=model_cfg.style_prompt,
-        model_type=model_cfg.model_type,
-        batch_size=model_cfg.batch_size,
-        beam_size=4,
-    )
-    train_out_path = os.path.join(full_pred_dir, f"{run_id}_train_full.csv")
-    train_pred_df.to_csv(train_out_path, index=False, encoding="utf-8-sig")
-    print(f"Saved train predictions with references to {train_out_path}")
 
 
 if __name__ == "__main__":

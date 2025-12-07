@@ -14,7 +14,7 @@ train:
   batch_size: 4
   gradient_accumulation_steps: 2
   num_train_epochs: 12
-  label_smoothing: 0.1
+  label_smoothing: 0.0
   fp16: false
   eval_steps: 500
   save_steps: 500
@@ -27,6 +27,11 @@ paths:
   checkpoint_dir: checkpoints/kot5-kakaobrain
   prediction_dir: prediction
   full_pred_dir: prediction_full
+
+data_paths:
+  train: /root/NLP_Dialouge_Summarization/data/data/train.csv
+  dev: /root/NLP_Dialouge_Summarization/data/data/dev.csv
+  test: /root/NLP_Dialouge_Summarization/data/data/test.csv
 
 wandb:
   use_wandb: false

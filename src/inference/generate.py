@@ -13,9 +13,15 @@ def run_generation(
     encoder_max_len: int,
     decoder_max_len: int,
     style_prompt: Optional[str],
+    encoder_template: Optional[str],
+    decoder_prefix: Optional[str],
     model_type: str,
     batch_size: int = 8,
     beam_size: int = 4,
+    max_new_tokens: int = 96,
+    min_length: int = 30,
+    repetition_penalty: float = 1.1,
+    length_penalty: float = 1.0,
 ) -> pd.DataFrame:
     dataset = DialogueSummaryDataset(
         test_df,
@@ -23,6 +29,7 @@ def run_generation(
         encoder_max_len=encoder_max_len,
         decoder_max_len=decoder_max_len,
         style_prompt=style_prompt,
+        encoder_template=encoder_template,
         model_type=model_type,
         is_train=False,
     )
@@ -47,16 +54,37 @@ def run_generation(
 
         input_ids = torch.tensor(input_ids).to(model.device)
         attention_mask = torch.tensor(attention_mask).to(model.device)
+        decoder_input_ids = None
+        if decoder_prefix:
+            prefix_ids = tokenizer(
+                decoder_prefix,
+                add_special_tokens=False,
+                return_tensors="pt",
+            )["input_ids"].to(model.device)
+            decoder_input_ids = prefix_ids.repeat(input_ids.size(0), 1)
 
         with torch.no_grad():
             generated_ids = model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                max_length=decoder_max_len,
+                decoder_input_ids=decoder_input_ids,
+                max_new_tokens=max_new_tokens,
+                min_length=min_length,
                 num_beams=beam_size,
+                repetition_penalty=repetition_penalty,
+                length_penalty=length_penalty,
             )
 
-        preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+        raw_preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+        preds = []
+        for p in raw_preds:
+            cleaned = p
+            for key in ["최종 요약:", "수정된 최종 요약:", "요약:"]:
+                if key in cleaned:
+                    cleaned = cleaned.split(key)[-1].strip()
+            if not cleaned:
+                cleaned = p.strip()
+            preds.append(cleaned)
         all_summaries.extend(preds)
 
     return pd.DataFrame(
@@ -77,9 +105,15 @@ def run_generation_with_references(
     encoder_max_len: int,
     decoder_max_len: int,
     style_prompt: Optional[str],
+    encoder_template: Optional[str],
+    decoder_prefix: Optional[str],
     model_type: str,
     batch_size: int = 8,
     beam_size: int = 4,
+    max_new_tokens: int = 96,
+    min_length: int = 30,
+    repetition_penalty: float = 1.1,
+    length_penalty: float = 1.0,
 ) -> pd.DataFrame:
     """dev처럼 정답 summary가 있는 데이터셋에서 요약 + 참조를 함께 저장."""
     dataset = DialogueSummaryDataset(
@@ -88,6 +122,7 @@ def run_generation_with_references(
         encoder_max_len=encoder_max_len,
         decoder_max_len=decoder_max_len,
         style_prompt=style_prompt,
+        encoder_template=encoder_template,
         model_type=model_type,
         is_train=False,
     )
@@ -108,16 +143,37 @@ def run_generation_with_references(
 
         input_ids = torch.tensor(input_ids).to(model.device)
         attention_mask = torch.tensor(attention_mask).to(model.device)
+        decoder_input_ids = None
+        if decoder_prefix:
+            prefix_ids = tokenizer(
+                decoder_prefix,
+                add_special_tokens=False,
+                return_tensors="pt",
+            )["input_ids"].to(model.device)
+            decoder_input_ids = prefix_ids.repeat(input_ids.size(0), 1)
 
         with torch.no_grad():
             generated_ids = model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                max_length=decoder_max_len,
+                decoder_input_ids=decoder_input_ids,
+                max_new_tokens=max_new_tokens,
+                min_length=min_length,
                 num_beams=beam_size,
+                repetition_penalty=repetition_penalty,
+                length_penalty=length_penalty,
             )
 
-        preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+        raw_preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+        preds: List[str] = []
+        for p in raw_preds:
+            cleaned = p
+            for key in ["최종 요약:", "수정된 최종 요약:", "요약:"]:
+                if key in cleaned:
+                    cleaned = cleaned.split(key)[-1].strip()
+            if not cleaned:
+                cleaned = p.strip()
+            preds.append(cleaned)
         for fname, base_fname, chunk_id, row_idx, pred in zip(
             fnames, base_fnames, chunk_ids, row_indices, preds
         ):

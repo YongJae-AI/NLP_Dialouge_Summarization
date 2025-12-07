@@ -11,7 +11,7 @@ from transformers import (
 )
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
-from .data import get_data_collator, load_datasets
+from .data import DataConfig, get_data_collator, load_datasets
 from .model_kobart import load_kobart_model_and_tokenizer
 from .model_t5 import load_t5_model_and_tokenizer
 from .utils import ModelConfig, get_checkpoint_dir, set_seed
@@ -223,7 +223,7 @@ def build_trainer(
         metric_for_best_model="eval_rougeL",
         run_name=wandb_run_name,
         report_to=report_to,
-        max_steps=-1,
+        max_steps=cfg.max_steps if cfg.max_steps is not None else -1,
         overwrite_output_dir=True,
     )
 
@@ -281,6 +281,7 @@ def run_sft_training(
     decoder_max_len: int,
     style_prompt: Optional[str],
     checkpoint_base_dir: str,
+    data_cfg: Optional["DataConfig"] = None,
     use_wandb: bool = False,
     wandb_project: Optional[str] = None,
     wandb_run_name: Optional[str] = None,
@@ -309,7 +310,10 @@ def run_sft_training(
         encoder_max_len=encoder_max_len,
         decoder_max_len=decoder_max_len,
         style_prompt=style_prompt,
+        encoder_template=model_cfg.encoder_template,
+        decoder_prefix=model_cfg.decoder_prefix,
         model_type=model_cfg.model_type,
+        data_cfg=data_cfg,
         teacher_map=teacher_map,
     )
 

@@ -16,20 +16,24 @@ class DialogueSummaryDataset(Dataset):
         encoder_max_len: int,
         decoder_max_len: int,
         style_prompt: Optional[str] = None,
+        encoder_template: Optional[str] = None,
         model_type: str = "kobart",
         is_train: bool = True,
         truncate_tail: bool = False,
         teacher_map: Optional[Dict[str, str]] = None,
+        decoder_prefix: Optional[str] = None,
     ) -> None:
         self.df = df.reset_index(drop=True)
         self.tokenizer = tokenizer
         self.encoder_max_len = encoder_max_len
         self.decoder_max_len = decoder_max_len
         self.style_prompt = style_prompt
+        self.encoder_template = encoder_template
         self.model_type = model_type
         self.is_train = is_train
         self.truncate_tail = truncate_tail
         self.teacher_map = teacher_map or {}
+        self.decoder_prefix = decoder_prefix or ""
 
     def _trim_dialogue(self, dialogue: str) -> str:
         # 뒤에서부터 턴을 붙여 encoder_max_len을 넘지 않도록 자른다.
@@ -61,13 +65,11 @@ class DialogueSummaryDataset(Dataset):
         if self.truncate_tail:
             dialogue = self._trim_dialogue(dialogue)
 
-        if self.style_prompt:
-            # QA+스타일 프롬프트를 포함한 정형 입력
-            src_text = (
-                f"{self.style_prompt}\n\n"
-                f"대화:\n{dialogue}\n\n"
-                "답변:"
-            )
+        if self.encoder_template:
+            # 템플릿에 {dialogue}를 주입
+            src_text = self.encoder_template.format(dialogue=dialogue)
+        elif self.style_prompt:
+            src_text = f"{self.style_prompt}\n\n대화:\n{dialogue}\n\n답변:"
         else:
             src_text = dialogue
 
@@ -86,6 +88,9 @@ class DialogueSummaryDataset(Dataset):
 
         if self.is_train:
             target = str(row["summary"])
+            if self.decoder_prefix:
+                # 학습 시에도 추론과 동일한 디코더 프리픽스를 앞에 붙여 CoT 패턴을 학습시킨다.
+                target = f"{self.decoder_prefix}{target}"
             with self.tokenizer.as_target_tokenizer():
                 labels = self.tokenizer(
                     target,
@@ -202,6 +207,8 @@ def load_datasets(
     encoder_max_len: int,
     decoder_max_len: int,
     style_prompt: Optional[str],
+    encoder_template: Optional[str],
+    decoder_prefix: Optional[str],
     model_type: str,
     data_cfg: Optional[DataConfig] = None,
     teacher_map: Optional[Dict[str, str]] = None,
@@ -236,10 +243,12 @@ def load_datasets(
         encoder_max_len,
         decoder_max_len,
         style_prompt=style_prompt,
+        encoder_template=encoder_template,
         model_type=model_type,
         is_train=True,
         truncate_tail=data_cfg.truncate_tail,
         teacher_map=teacher_map,
+        decoder_prefix=decoder_prefix,
     )
     dev_ds = DialogueSummaryDataset(
         dev_df,
@@ -247,10 +256,12 @@ def load_datasets(
         encoder_max_len,
         decoder_max_len,
         style_prompt=style_prompt,
+        encoder_template=encoder_template,
         model_type=model_type,
         is_train=True,
         truncate_tail=data_cfg.truncate_tail,
         teacher_map=teacher_map,
+        decoder_prefix=decoder_prefix,
     )
     test_ds = DialogueSummaryDataset(
         test_df,
@@ -258,6 +269,7 @@ def load_datasets(
         encoder_max_len,
         decoder_max_len,
         style_prompt=style_prompt,
+        encoder_template=encoder_template,
         model_type=model_type,
         is_train=False,
         truncate_tail=data_cfg.truncate_tail,
